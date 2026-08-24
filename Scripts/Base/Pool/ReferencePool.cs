@@ -10,6 +10,7 @@ namespace XiancaiFramework.Base.Pool
     {
         static ReferencePool()
         {
+            ReferencePool.RegisterReleaseAction<T>(Release);
             ReferencePool.RegisterClearAction(Clear);
         }
         
@@ -87,6 +88,7 @@ namespace XiancaiFramework.Base.Pool
     /// </summary>
     public static class ReferencePool
     {
+        private static readonly Dictionary<Type, Action<IReference>> ReleaseActions = new Dictionary<Type, Action<IReference>>();
         private static readonly List<Action> ClearActions = new List<Action>();
         
         public static T Acquire<T>() where T : IReference, new()
@@ -104,6 +106,24 @@ namespace XiancaiFramework.Base.Pool
             ReferencePool<T>.MaxSize = capacity;
         }
 
+        internal static void RegisterReleaseAction<T>(Action<T> action) where T : IReference
+        {
+            if (action == null)
+            {
+                throw new ArgumentNullException($"[ReferencePool<{typeof(T).Name}>] RegisterReleaseAction is null]");
+            }
+
+            ReleaseActions[typeof(T)] = obj => action((T)obj);
+        }
+
+        public static void ReleaseReference(IReference obj)
+        {
+            if (ReleaseActions.TryGetValue(obj.GetType(), out Action<IReference> action))
+            {
+                action(obj);
+            }
+        }
+        
         internal static void RegisterClearAction(Action action)
         {
             ClearActions.Add(action);
