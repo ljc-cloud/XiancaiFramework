@@ -5,6 +5,9 @@ using XiancaiFramework.Base.Pool;
 
 namespace XiancaiFramework.Base.Event
 {
+    /// <summary>
+    /// 事件调度器
+    /// </summary>
     public class EventDispatcher
     {
         private static EventDispatcher _global;
@@ -46,6 +49,10 @@ namespace XiancaiFramework.Base.Event
                     return;
                 }
                 handlers.Add(handler);
+            }
+            else
+            {
+                _eventHandlers[eventType] = new List<Delegate> { handler };
             }
         }
 
