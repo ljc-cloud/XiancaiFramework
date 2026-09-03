@@ -4,14 +4,29 @@ using UnityEngine;
 namespace XiancaiFramework.Base.Pool
 {
     /// <summary>
-    /// 对象池的实现
+    /// 对象池
     /// </summary>
     public class ObjectPoolManager
     {
+        /// <summary>
+        /// 池字典
+        /// </summary>
         private readonly Dictionary<GameObject, ObjectPool> _pools = new Dictionary<GameObject, ObjectPool>();
         
         public int PoolCount => _pools.Count;
-
+        
+        public void Prewarm(GameObject key, int count)
+        {
+            if (_pools.TryGetValue(key, out var pool))
+            {
+                pool.Prewarm(count);
+                return;
+            }
+            pool = new ObjectPool(key);
+            _pools[key] = pool;
+            pool.Prewarm(count);
+        }
+        
         public GameObject Spawn(GameObject key)
         {
             GameObject spawned = null;
@@ -31,29 +46,20 @@ namespace XiancaiFramework.Base.Pool
                 Debug.LogError($"[ObjectPoolManager] Spawn key:{key.name}，Spawn为空");
                 return null;
             }
-
-            IPooledObject pooledObject = spawned.GetComponent<IPooledObject>();
-            if (pooledObject == null)
-            {
-                Debug.LogError($"[ObjectPoolManager] Spawn key:{key.name}，没有池化组件");
-                return spawned;
-            }
-            pooledObject.OnSpawn();
             
-            return pool.Spawn();
+            return spawned;
         }
 
         public void Despawn(GameObject key, GameObject obj)
         {
+            if (obj == null) return;
             if (_pools.TryGetValue(key, out var pool))
             {
-                IPooledObject pooledObject = obj.GetComponent<IPooledObject>();
-                pooledObject.OnDespawn();
                 pool.Despawn(obj);
                 return;
             }
-
             Debug.LogWarning($"[ObjectPoolManager] Despawn key:{key.name}, 不存在该池");
+            Object.Destroy(obj);
         }
     }
 }
