@@ -1,7 +1,6 @@
 using Cysharp.Threading.Tasks;
-using UnityEngine;
 
-namespace XiancaiFramework.Base.Resource
+namespace XiancaiFramework.Resource
 {
     /// <summary>
     /// 资源加载器接口（纯 I/O 适配器）

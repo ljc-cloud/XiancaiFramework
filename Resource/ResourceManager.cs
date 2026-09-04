@@ -4,7 +4,7 @@ using Cysharp.Threading.Tasks;
 using UnityEngine;
 using Object = UnityEngine.Object;
 
-namespace XiancaiFramework.Base.Resource
+namespace XiancaiFramework.Resource
 {
     /// <summary>
     /// 资源管理器

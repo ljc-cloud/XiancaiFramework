@@ -2,7 +2,7 @@ using Cysharp.Threading.Tasks;
 using UnityEngine;
 using Object = UnityEngine.Object;
 
-namespace XiancaiFramework.Base.Resource
+namespace XiancaiFramework.Resource
 {
     /// <summary>
     /// 基于 Resources 的资源加载器（纯 I/O 实现）

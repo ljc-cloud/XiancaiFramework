@@ -1,11 +1,9 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Cysharp.Threading.Tasks;
-using UnityEditor;
 using UnityEngine;
 using Object = UnityEngine.Object;
 
-namespace XiancaiFramework.Base.Resource
+namespace XiancaiFramework.Resource
 {
     /// <summary>
     /// 基于AssetBundle实现的资源加载器

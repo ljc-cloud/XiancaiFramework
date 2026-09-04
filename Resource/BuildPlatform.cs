@@ -1,6 +1,6 @@
 using UnityEngine;
 
-namespace XiancaiFramework.Base.Resource
+namespace XiancaiFramework.Resource
 {
     /// <summary>
     /// 平台 → 资源包目录名 的统一映射（构建脚本与运行时共用，禁止在别处再手写平台名）
