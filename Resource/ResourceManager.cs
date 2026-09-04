@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 using Object = UnityEngine.Object;
@@ -44,6 +45,16 @@ namespace XiancaiFramework.Resource
         /// </summary>
         private readonly Dictionary<string, UniTask<Object>> _pendingLoads = new Dictionary<string, UniTask<Object>>();
 
+        /// <summary>
+        /// 常驻预热句柄表：key -> 常驻持有的句柄（预热期间引用不归零，缓存不清理）
+        /// </summary>
+        private readonly Dictionary<string, ResourceHandle> _residentHandles = new Dictionary<string, ResourceHandle>();
+
+        /// <summary>
+        /// key -> 进行中的预热（并发去重）
+        /// </summary>
+        private readonly Dictionary<string, UniTask<bool>> _residentPending = new Dictionary<string, UniTask<bool>>();
+
         public ResourceManager(IResourceLoader loader)
         {
             _loader = loader ?? throw new ArgumentNullException(nameof(loader));
@@ -61,7 +72,8 @@ namespace XiancaiFramework.Resource
             {
                 if (cached is T t)
                 {
-                    _assetReferenceDict[t]++;
+                    AddRefCount(t);
+                    // _assetReferenceDict[t]++;
                     return t;
                 }
 
@@ -78,7 +90,8 @@ namespace XiancaiFramework.Resource
             }
 
             CacheAsset(key, asset);
-            _assetReferenceDict[asset]++;
+            AddRefCount(asset);
+            // _assetReferenceDict[asset]++;
             return asset;
         }
 
@@ -95,7 +108,8 @@ namespace XiancaiFramework.Resource
             {
                 if (cached is T t)
                 {
-                    _assetReferenceDict[t]++;
+                    // _assetReferenceDict[t]++;
+                    AddRefCount(t);
                     return t;
                 }
 
@@ -137,7 +151,8 @@ namespace XiancaiFramework.Resource
             }
 
             // 4. 每个调用方各自 +1（先验类型再计数，防止计数泄漏）
-            _assetReferenceDict[asset]++;
+            AddRefCount(asset);
+            // _assetReferenceDict[asset]++;
             return typed;
         }
 
@@ -160,6 +175,18 @@ namespace XiancaiFramework.Resource
         {
             _cachedAssetDict[key] = asset;
             _assetToKey[asset] = key;
+        }
+
+        private void AddRefCount(Object asset)
+        {
+            if (_assetReferenceDict.TryGetValue(asset, out var refCount))
+            {
+                _assetReferenceDict[asset] = refCount + 1;
+            }
+            else
+            {
+                _assetReferenceDict[asset] = 1;
+            }
         }
 
         // ==================== 卸载 ====================
@@ -191,6 +218,140 @@ namespace XiancaiFramework.Resource
             else
             {
                 _assetReferenceDict[asset] = count - 1;
+            }
+        }
+
+        // ==================== 句柄模式 ====================
+
+        /// <summary>
+        /// 同步加载并返回资源句柄，失败返回 null（失败不缓存、不计数，无需释放）
+        /// 句柄持有期间资源引用 +1；不再使用时调用 handle.Dispose() 归还
+        /// </summary>
+        public ResourceHandle LoadHandle<T>(string key) where T : Object
+        {
+            T asset = Load<T>(key);
+            return asset == null ? null : new ResourceHandle(this, key, asset);
+        }
+
+        /// <summary>
+        /// 异步加载并返回资源句柄，失败返回 null
+        /// 同 key 并发请求仍合并为一次底层加载；每个成功的调用方各自持有独立句柄与 +1 引用
+        /// </summary>
+        public async UniTask<ResourceHandle> LoadHandleAsync<T>(string key) where T : Object
+        {
+            T asset = await LoadAsync<T>(key);
+            return asset == null ? null : new ResourceHandle(this, key, asset);
+        }
+
+        /// <summary>
+        /// 释放句柄（等价于 handle.Dispose()，供 manager 中心化的写法使用）
+        /// </summary>
+        public void Release(ResourceHandle handle)
+        {
+            handle?.Dispose();
+        }
+
+        // ==================== 预热加载（常驻持有） ====================
+
+        /// <summary>
+        /// 同步预热单个资源：加载成功并常驻持有（引用 +1 且不释放），失败返回 false（可重试）
+        /// 注意：预热必须"持有引用"——只 Load 后立刻 Release 等于没预热（计数归零会卸载并清缓存）
+        /// </summary>
+        public bool Preload<T>(string key) where T : Object
+        {
+            if (_residentHandles.ContainsKey(key)) return true;
+
+            ResourceHandle handle = LoadHandle<T>(key);
+            if (handle == null) return false;
+
+            _residentHandles[key] = handle;
+            return true;
+        }
+
+        /// <summary>
+        /// 异步预热单个资源：加载成功并常驻持有，失败返回 false（可重试）
+        /// 同 key 并发请求合并为一次加载，不会产生多份常驻引用
+        /// </summary>
+        public async UniTask<bool> PreloadAsync<T>(string key) where T : Object
+        {
+            if (_residentHandles.ContainsKey(key)) return true;
+
+            if (_residentPending.TryGetValue(key, out var pending))
+            {
+                return await pending;
+            }
+
+            UniTask<bool> task = PreloadCoreAsync<T>(key);
+            _residentPending[key] = task;
+            try
+            {
+                return await task;
+            }
+            finally
+            {
+                _residentPending.Remove(key);
+            }
+        }
+
+        private async UniTask<bool> PreloadCoreAsync<T>(string key) where T : Object
+        {
+            ResourceHandle handle = await LoadHandleAsync<T>(key);
+            if (handle == null) return false;
+
+            _residentHandles[key] = handle;   // 常驻持有：引用不归零、缓存不被清理
+            return true;
+        }
+
+        /// <summary>
+        /// 取消预热：归还常驻引用（计数归零时走正常卸载并清缓存）
+        /// </summary>
+        public void Unpreload(string key)
+        {
+            if (_residentHandles.TryGetValue(key, out ResourceHandle handle))
+            {
+                _residentHandles.Remove(key);
+                handle.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// 该 key 是否已常驻预热
+        /// </summary>
+        public bool IsPreloaded(string key)
+        {
+            return _residentHandles.ContainsKey(key);
+        }
+
+        /// <summary>
+        /// 批量预热：按 maxConcurrent 分片并发（限制瞬时 IO/解压峰值），逐片上报进度
+        /// 取消粒度为"片之间"：已在途的一片会加载完成，不打断单个加载
+        /// </summary>
+        /// <param name="keys">待预热 key 集合</param>
+        /// <param name="progress">进度回调 0~1</param>
+        /// <param name="maxConcurrent">每片并发上限</param>
+        /// <param name="token">取消令牌</param>
+        public async UniTask PreloadGroupAsync<T>(IEnumerable<string> keys, IProgress<float> progress = null,
+            int maxConcurrent = 4, CancellationToken token = default) where T : Object
+        {
+            List<string> list = new List<string>(keys);
+            int total = list.Count;
+            int done = 0;
+
+            for (int i = 0; i < total; i += maxConcurrent)
+            {
+                token.ThrowIfCancellationRequested();
+
+                int count = Mathf.Min(maxConcurrent, total - i);
+                UniTask<bool>[] tasks = new UniTask<bool>[count];
+                for (int j = 0; j < count; j++)
+                {
+                    tasks[j] = PreloadAsync<T>(list[i + j]);
+                }
+
+                await UniTask.WhenAll(tasks);
+
+                done += count;
+                progress?.Report((float)done / total);
             }
         }
 
@@ -256,6 +417,14 @@ namespace XiancaiFramework.Resource
                 Object.Destroy(kv.Key);
             }
             _instanceToAsset.Clear();
+
+            // 先归还常驻预热引用（走正常 Release 路径：计数归零即卸载 + 清缓存）
+            foreach (var kv in _residentHandles)
+            {
+                kv.Value.Dispose();
+            }
+            _residentHandles.Clear();
+            _residentPending.Clear();
 
             foreach (var asset in _assetReferenceDict.Keys)
             {
